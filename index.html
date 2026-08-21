@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guardián de Olvidos v2.8.0</title>
+    <link rel="manifest" href="./manifest.json">
+    <link rel="icon" type="image/svg+xml" href="./icon.svg">
+    <meta name="theme-color" content="#374151">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brandGray: '#374151',
+                        brandGrayDark: '#1f2937',
+                        brandGreen: '#22c55e',
+                        brandOrange: '#f97316'
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-gray-950 text-gray-100 font-sans min-h-screen flex flex-col items-center justify-center p-4">
+    <!-- medbasha -->
+    <div class="max-w-md w-full bg-brandGrayDark rounded-2xl p-6 shadow-2xl border border-brandGray text-center">
+        <div class="w-20 h-20 mx-auto mb-4">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" class="w-full h-full drop-shadow-lg">
+                <rect width="512" height="512" rx="100" fill="#1f2937"/>
+                <circle cx="256" cy="256" r="180" fill="none" stroke="#22c55e" stroke-width="16" stroke-dasharray="12 12"/>
+                <rect x="206" y="76" width="100" height="360" rx="20" fill="#374151"/>
+                <circle cx="256" cy="256" r="120" fill="#374151" stroke="#22c55e" stroke-width="12"/>
+                <circle cx="256" cy="256" r="90" fill="#111827"/>
+                <path d="M256 190 v66 h50" fill="none" stroke="#f97316" stroke-width="12" stroke-linecap="round"/>
+                <circle cx="256" cy="256" r="12" fill="#f97316"/>
+            </svg>
+        </div>
+        
+        <h1 class="text-2xl font-bold mb-1 text-brandGreen">Guardián de Olvidos v2.8.0</h1>
+        <p class="text-gray-400 text-sm mb-6">Radar Anti-Olvidos PWA</p>
+
+        <!-- Panel de control principal -->
+        <div class="space-y-3 mb-6">
+            <button id="addDeviceBtn" type="button" class="w-full bg-brandGreen hover:bg-green-600 text-white font-medium py-3 px-4 rounded-xl transition duration-200 shadow-lg flex items-center justify-center gap-2 cursor-pointer active:scale-95">
+                <span>➕ Vincular Dispositivo Bluetooth</span>
+            </button>
+        </div>
+
+        <!-- Lista de dispositivos guardados -->
+        <div class="mb-6 text-left">
+            <div class="flex justify-between items-center mb-2">
+                <span class="text-xs font-semibold uppercase tracking-wider text-gray-400">Dispositivos Vigilados</span>
+                <span id="deviceCount" class="text-xs bg-gray-800 px-2 py-0.5 rounded-full text-brandGreen font-bold">0 activos</span>
+            </div>
+            <div id="deviceList" class="space-y-2 max-h-48 overflow-y-auto pr-1">
+                <div id="emptyListMsg" class="p-4 rounded-xl bg-gray-900 border border-brandGray text-center text-xs text-gray-500">
+                    No hay dispositivos guardados. Pulsa arriba para buscar.
+                </div>
+            </div>
+        </div>
+
+        <div id="alarmZone" class="mb-6 p-4 rounded-xl bg-gray-900 border border-brandOrange hidden">
+            <p class="text-brandOrange font-bold animate-bounce text-sm">⚠️ ¡ALERTA: TE HAS ALEJADO DE TU DISPOSITIVO!</p>
+        </div>
+
+        <!-- Terminal de registro -->
+        <div class="text-left">
+            <span class="text-xs font-mono text-gray-400">Registro PWA:</span>
+            <div id="logTerminal" class="h-28 overflow-y-auto bg-black/70 border border-brandGray rounded-lg p-2 text-xs font-mono text-gray-300 mt-1 space-y-1">
+                <div>[PWA] Guardián de Olvidos 2.8.0 listo.</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // medbasha - Guardián de Olvidos v2.8.0 (IndexedDB Persistence & Radar Monitoring)
+        const DB_NAME = 'GuardianOlvidosPWA_v280';
+        const DB_VERSION = 1;
+        let db = null;
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onupgradeneeded = (e) => {
+                    const dbRef = e.target.result;
+                    if (!dbRef.objectStoreNames.contains('pwa_devices')) {
+                        dbRef.createObjectStore('pwa_devices', { keyPath: 'id' });
+                    }
+                };
+                request.onsuccess = (e) => {
+                    db = e.target.result;
+                    resolve(db);
+                };
+                request.onerror = (e) => reject(e.target.error);
+            });
+        }
+
+        async function saveDeviceToDB(devData) {
+            if (!db) await initDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction('pwa_devices', 'readwrite');
+                tx.objectStore('pwa_devices').put(devData);
+                tx.oncomplete = () => resolve();
+                tx.onerror = (e) => reject(e.target.error);
+            });
+        }
+
+        async function loadDevicesFromDB() {
+            if (!db) await initDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction('pwa_devices', 'readonly');
+                const store = tx.objectStore('pwa_devices');
+                const request = store.getAll();
+                request.onsuccess = () => resolve(request.result || []);
+                request.onerror = (e) => reject(e.target.error);
+            });
+        }
+
+        async function removeDeviceFromDB(id) {
+            if (!db) return;
+            const tx = db.transaction('pwa_devices', 'readwrite');
+            tx.objectStore('pwa_devices').delete(id);
+        }
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(err => console.error(err));
+            });
+        }
+
+        let trackedDevices = [];
+        let monitorInterval = null;
+        let addDeviceBtn, deviceList, emptyListMsg, deviceCount, alarmZone, logTerminal;
+
+        function addLog(msg) {
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.textContent = `[${time}] ${msg}`;
+            if (logTerminal) {
+                logTerminal.appendChild(entry);
+                logTerminal.scrollTop = logTerminal.scrollHeight;
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', async () => {
+            addDeviceBtn = document.getElementById('addDeviceBtn');
+            deviceList = document.getElementById('deviceList');
+            emptyListMsg = document.getElementById('emptyListMsg');
+            deviceCount = document.getElementById('deviceCount');
+            alarmZone = document.getElementById('alarmZone');
+            logTerminal = document.getElementById('logTerminal');
+
+            if (addDeviceBtn) {
+                addDeviceBtn.onclick = function() {
+                    vincularDispositivoPWA();
+                };
+            }
+
+            await initDB();
+            await recargarDispositivosPersistentes();
+            iniciarVigilanciaRadar();
+        });
+
+        async function recargarDispositivosPersistentes() {
+            const guardados = await loadDevicesFromDB();
+            if (guardados.length > 0) {
+                trackedDevices = guardados.map(d => ({ ...d, status: 'desconectado' }));
+                addLog(`Cargados ${guardados.length} dispositivo(s) desde IndexedDB.`);
+                actualizarListaUI();
+
+                if ('bluetooth' in navigator && 'getDevices' in navigator.bluetooth) {
+                    try {
+                        const autorizados = await navigator.bluetooth.getDevices();
+                        autorizados.forEach(dev => {
+                            const enLista = trackedDevices.find(d => d.id === dev.id);
+                            if (enLista) {
+                                enLista.deviceObj = dev;
+                                intentarConexionGATT(enLista);
+                            }
+                        });
+                    } catch (e) {
+                        addLog("Revisando permisos del navegador...");
+                    }
+                }
+            }
+        }
+
+        async function vincularDispositivoPWA() {
+            if (!navigator.bluetooth) {
+                addLog("❌ Web Bluetooth no es soportado o falta HTTPS.");
+                alert("Abre la aplicación desde Chrome en tu teléfono con HTTPS o GitHub Pages.");
+                return;
+            }
+
+            try {
+                addLog("Abriendo selector Bluetooth...");
+                const dev = await navigator.bluetooth.requestDevice({
+                    acceptAllDevices: true,
+                    optionalServices: ['battery_service', 'device_information', 0x180f, 0x180a]
+                });
+
+                if (!dev) return;
+
+                const item = {
+                    id: dev.id,
+                    name: dev.name || "Tag Bluetooth",
+                    status: "conectando",
+                    deviceObj: dev
+                };
+
+                if (trackedDevices.some(d => d.id === item.id)) {
+                    addLog("El dispositivo ya está registrado.");
+                    return;
+                }
+
+                // Escuchar evento directo de desconexión del sistema
+                dev.addEventListener('gattserverdisconnected', () => {
+                    addLog(`⚠️ Pérdida de cobertura: ${item.name}`);
+                    item.status = "perdido";
+                    dispararAlertaOlvido(item);
+                    actualizarListaUI();
+                });
+
+                trackedDevices.push(item);
+                await saveDeviceToDB({ id: item.id, name: item.name });
+                addLog(`💾 Guardado en IndexedDB: ${item.name}`);
+
+                actualizarListaUI();
+                intentarConexionGATT(item);
+
+            } catch (err) {
+                addLog(`Búsqueda cancelada o cerrada.`);
+            }
+        }
+
+        async function intentarConexionGATT(item) {
+            if (!item.deviceObj || !item.deviceObj.gatt) return;
+            try {
+                addLog(`Conectando con ${item.name}...`);
+                await item.deviceObj.gatt.connect();
+                item.status = "ok";
+                addLog(`🟢 En Rango: ${item.name}`);
+                verificarAlarmaGlobal();
+            } catch (e) {
+                item.status = "desconectado";
+            }
+            actualizarListaUI();
+        }
+
+        // Bucle de vigilancia cada 5 segundos
+        function iniciarVigilanciaRadar() {
+            if (monitorInterval) clearInterval(monitorInterval);
+            monitorInterval = setInterval(() => {
+                trackedDevices.forEach(item => {
+                    if (item.deviceObj && item.deviceObj.gatt) {
+                        if (!item.deviceObj.gatt.connected && item.status === "ok") {
+                            item.status = "perdido";
+                            addLog(`⚠️ Desconectado por distancia: ${item.name}`);
+                            dispararAlertaOlvido(item);
+                        }
+                    }
+                });
+                actualizarListaUI();
+            }, 5000);
+        }
+
+        function dispararAlertaOlvido(item) {
+            if (navigator.vibrate) {
+                navigator.vibrate([300, 150, 300, 150, 300]);
+            }
+            ejecutarSonidoAlarma();
+            verificarAlarmaGlobal();
+        }
+
+        function verificarAlarmaGlobal() {
+            const hayPerdidos = trackedDevices.some(d => d.status === "perdido");
+            if (hayPerdidos) {
+                alarmZone.classList.remove('hidden');
+            } else {
+                alarmZone.classList.add('hidden');
+            }
+        }
+
+        function ejecutarSonidoAlarma() {
+            try {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(783.99, audioCtx.currentTime); // Tono G5
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 1.5);
+            } catch (e) {
+                console.log(e);
+            }
+        }
+
+        function actualizarListaUI() {
+            if (!deviceCount || !deviceList) return;
+            deviceCount.textContent = `${trackedDevices.length} vigilado(s)`;
+
+            if (trackedDevices.length === 0) {
+                emptyListMsg.classList.remove('hidden');
+                deviceList.innerHTML = '';
+                deviceList.appendChild(emptyListMsg);
+                return;
+            }
+
+            emptyListMsg.classList.add('hidden');
+            deviceList.innerHTML = '';
+
+            trackedDevices.forEach(item => {
+                const card = document.createElement('div');
+                card.className = "p-3 rounded-xl bg-gray-900 border border-brandGray flex items-center justify-between";
+                
+                let badge = '';
+                if (item.status === 'ok') {
+                    badge = `<span class="text-xs px-2 py-0.5 rounded bg-green-950 text-brandGreen border border-green-800">En Rango</span>`;
+                } else if (item.status === 'perdido') {
+                    badge = `<span class="text-xs px-2 py-0.5 rounded bg-red-950 text-red-400 border border-red-800 font-bold animate-pulse">¡FUERA DE RANGO!</span>`;
+                } else {
+                    badge = `<span class="text-xs px-2 py-0.5 rounded bg-gray-800 text-gray-400 border border-gray-700">En Espera</span>`;
+                }
+
+                card.innerHTML = `
+                    <div class="text-left">
+                        <div class="text-sm font-semibold text-gray-200">${item.name}</div>
+                        <div class="text-xs mt-0.5">${badge}</div>
+                    </div>
+                    <div class="flex items-center gap-1.5">
+                        <button type="button" onclick="reconectarManual('${item.id}')" class="text-xs bg-brandGray px-2 py-1 rounded text-white hover:bg-gray-600">Reconectar</button>
+                        <button type="button" onclick="eliminarTagPWA('${item.id}')" class="text-xs bg-red-950 text-red-400 px-2 py-1 rounded border border-red-800">🗑️</button>
+                    </div>
+                `;
+                deviceList.appendChild(card);
+            });
+        }
+
+        window.reconectarManual = function(id) {
+            const item = trackedDevices.find(d => d.id === id);
+            if (item) intentarConexionGATT(item);
+        };
+
+        window.eliminarTagPWA = async function(id) {
+            trackedDevices = trackedDevices.filter(d => d.id !== id);
+            await removeDeviceFromDB(id);
+            addLog("Dispositivo eliminado de IndexedDB.");
+            verificarAlarmaGlobal();
+            actualizarListaUI();
+        };
+    </script>
+</body>
+</html>
